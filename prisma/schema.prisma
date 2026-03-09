@@ -1,0 +1,263 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CrawlRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIAL
+}
+
+enum CrawlItemStatus {
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum CrawlSourceScope {
+  CATEGORY
+  PRODUCT
+  REVIEWS
+}
+
+model Marketplace {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  domain       String
+  currencyCode String
+  locale       String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  categories      Category[]
+  sellers         Seller[]
+  products        Product[]
+  reviews         Review[]
+  crawlRuns       CrawlRun[]
+  syncCheckpoints SyncCheckpoint[]
+}
+
+model Category {
+  id            String   @id @default(cuid())
+  marketplaceId String
+  externalId    String?
+  name          String
+  slug          String
+  path          String
+  level         Int
+  sourceUrl     String?
+  parentId      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  marketplace      Marketplace       @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  parent           Category?         @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children         Category[]        @relation("CategoryTree")
+  productLinks     ProductCategory[]
+  syncCheckpoints  SyncCheckpoint[]
+
+  @@unique([marketplaceId, slug])
+  @@index([marketplaceId, parentId])
+  @@index([marketplaceId, path])
+  @@index([marketplaceId, externalId])
+}
+
+model Brand {
+  id             String   @id @default(cuid())
+  name           String
+  normalizedName String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  products Product[]
+}
+
+model Seller {
+  id               String   @id @default(cuid())
+  marketplaceId    String
+  externalSellerId String?
+  displayName      String
+  normalizedName   String
+  sellerUrl        String?
+  rating           Float?
+  ratingsCount     Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  marketplace Marketplace    @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  products    ProductSeller[]
+
+  @@unique([marketplaceId, normalizedName])
+  @@unique([marketplaceId, externalSellerId])
+  @@index([marketplaceId, rating])
+}
+
+model Product {
+  id                String   @id @default(cuid())
+  marketplaceId     String
+  asin              String
+  title             String
+  normalizedTitle   String
+  productUrl        String
+  imageUrl          String?
+  priceCents        Int?
+  currencyCode      String?
+  averageRating     Float?
+  ratingsCount      Int?
+  reviewsCount      Int?
+  brandId           String?
+  detailFingerprint String?
+  firstSeenAt       DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+  lastReviewCrawlAt DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  marketplace  Marketplace       @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  brand        Brand?            @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  categoryLinks ProductCategory[]
+  sellerLinks   ProductSeller[]
+  reviews       Review[]
+  crawlItems    CrawlRunItem[]
+  syncCheckpoints SyncCheckpoint[]
+
+  @@unique([marketplaceId, asin])
+  @@index([marketplaceId, reviewsCount])
+  @@index([marketplaceId, averageRating])
+  @@index([brandId])
+  @@index([lastReviewCrawlAt])
+  @@index([lastSeenAt])
+}
+
+model ProductCategory {
+  productId      String
+  categoryId     String
+  isPrimary      Boolean  @default(false)
+  rankInCategory Int?
+  capturedAt     DateTime @default(now())
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([productId, categoryId])
+  @@index([categoryId, rankInCategory])
+  @@index([capturedAt])
+}
+
+model ProductSeller {
+  productId      String
+  sellerId       String
+  offerListingId String?
+  priceCents     Int?
+  isBuyBox       Boolean  @default(false)
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  seller  Seller  @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+
+  @@id([productId, sellerId])
+  @@index([sellerId, lastSeenAt])
+  @@index([offerListingId])
+}
+
+model Review {
+  id                 BigInt   @id @default(autoincrement())
+  marketplaceId      String
+  productId          String
+  externalReviewId   String
+  reviewUrl          String?
+  title              String?
+  body               String
+  rating             Float
+  languageCode       String?
+  authorName         String?
+  authorProfileUrl   String?
+  isVerifiedPurchase Boolean  @default(false)
+  isVineVoice        Boolean  @default(false)
+  helpfulVotes       Int      @default(0)
+  reviewedAt         DateTime
+  scrapedAt          DateTime @default(now())
+  lastSeenAt         DateTime @default(now())
+  contentFingerprint String
+  rawPayload         Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  product     Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  crawlItems  CrawlRunItem[]
+
+  @@unique([marketplaceId, externalReviewId])
+  @@index([productId, reviewedAt])
+  @@index([productId, lastSeenAt])
+  @@index([reviewedAt])
+  @@index([helpfulVotes])
+}
+
+model CrawlRun {
+  id           String         @id @default(cuid())
+  marketplaceId String
+  sourceScope  CrawlSourceScope
+  sourceRef    String
+  status       CrawlRunStatus @default(RUNNING)
+  startedAt    DateTime       @default(now())
+  finishedAt   DateTime?
+  metrics      Json?
+  errorMessage String?
+  createdAt    DateTime       @default(now())
+
+  marketplace Marketplace   @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  items       CrawlRunItem[]
+
+  @@index([marketplaceId, startedAt])
+  @@index([status, startedAt])
+}
+
+model CrawlRunItem {
+  id          String          @id @default(cuid())
+  crawlRunId  String
+  status      CrawlItemStatus
+  stage       String
+  message     String?
+  attempts    Int             @default(1)
+  productId   String?
+  reviewId    BigInt?
+  createdAt   DateTime        @default(now())
+
+  crawlRun CrawlRun @relation(fields: [crawlRunId], references: [id], onDelete: Cascade)
+  product  Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  review   Review?  @relation(fields: [reviewId], references: [id], onDelete: SetNull)
+
+  @@index([crawlRunId, stage])
+  @@index([productId, createdAt])
+  @@index([reviewId])
+}
+
+model SyncCheckpoint {
+  id              String           @id @default(cuid())
+  marketplaceId   String
+  scope           CrawlSourceScope
+  scopeRef        String
+  checkpointTime  DateTime?
+  checkpointToken String?
+  categoryId      String?
+  productId       String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  category    Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  product     Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([marketplaceId, scope, scopeRef])
+  @@index([scope, checkpointTime])
+  @@index([productId])
+  @@index([categoryId])
+}
